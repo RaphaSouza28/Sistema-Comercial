@@ -1,0 +1,68 @@
+appId: br.com.sistemacomercial.desktop
+productName: Sistema Comercial
+copyright: Copyright © 2026 Sistema Comercial
+
+directories:
+  output: release
+  buildResources: build
+
+# Código já empacotado pelo electron-vite. As dependências de produção
+# (Prisma Client, adapter libSQL e binário nativo) são incluídas automaticamente.
+files:
+  - out/**
+  - package.json
+  - '!**/*.map'
+  - '!electron/database/generated/**'
+  # O Prisma Client traz compiladores de consulta para todos os bancos; só o SQLite é usado.
+  - '!**/node_modules/@prisma/client/runtime/*.{postgresql,mysql,sqlserver,cockroachdb}.*'
+  - '!**/node_modules/@prisma/client/runtime/*.d.{ts,mts}'
+  - '!**/node_modules/**/*.{md,map}'
+
+asar: true
+asarUnpack:
+  # Binário nativo N-API do libSQL precisa existir fora do arquivo .asar
+  - '**/*.node'
+  - '**/node_modules/@libsql/win32-x64-msvc/**'
+
+extraResources:
+  # Migrations SQL aplicadas na inicialização (electron/database/migrator.ts)
+  - from: prisma/migrations
+    to: migrations
+    filter: ['**/*.sql']
+  - from: build/icon.png
+    to: icon.png
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.png
+  # Assinatura digital: ver README (seção "Assinatura digital").
+  signAndEditExecutable: true
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Sistema Comercial
+  # Os dados ficam em %APPDATA%\Sistema Comercial e NÃO são removidos na desinstalação.
+  deleteAppDataOnUninstall: false
+  artifactName: Sistema-Comercial-Setup-${version}.exe
+  uninstallDisplayName: Sistema Comercial
+
+publish: null
+
+# Endurecimento do executável (Electron Fuses): impede usar o programa como interpretador Node,
+# injetar código por variáveis de ambiente/depurador e carregar código fora do app.asar assinado.
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  # Necessário: a interface é carregada de dentro do app.asar via file://
+  grantFileProtocolExtraPrivileges: true

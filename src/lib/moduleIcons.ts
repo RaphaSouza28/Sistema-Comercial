@@ -1,0 +1,40 @@
+import {
+  BookOpen,
+  Boxes,
+  ChartColumn,
+  ClipboardList,
+  CreditCard,
+  FileBadge,
+  FileText,
+  HandCoins,
+  LayoutDashboard,
+  Package,
+  Receipt,
+  Settings,
+  ShoppingCart,
+  Truck,
+  UserCog,
+  Users,
+  Wallet,
+  type LucideIcon
+} from 'lucide-react'
+
+export const MODULE_ICONS: Record<string, LucideIcon> = {
+  dashboard: LayoutDashboard,
+  pdv: ShoppingCart,
+  orders: ClipboardList,
+  catalog: BookOpen,
+  stock: Boxes,
+  cash: Wallet,
+  payables: Receipt,
+  receivables: HandCoins,
+  customers: Users,
+  quotes: FileText,
+  products: Package,
+  reports: ChartColumn,
+  fiscal: FileBadge,
+  tef: CreditCard,
+  suppliers: Truck,
+  users: UserCog,
+  settings: Settings
+}

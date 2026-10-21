@@ -1,0 +1,962 @@
+// Sistema Comercial — schema do banco de dados (SQLite)
+//
+// Convenções:
+//   *Cents  -> valores monetários em centavos inteiros (R$ 12,34 = 1234)
+//   *Milli  -> quantidades em milésimos inteiros (1 UN = 1000; 0,250 kg = 250)
+//   *Bps    -> percentuais em pontos-base (30% = 3000; 2,5% = 250)
+// Registros financeiros nunca são excluídos fisicamente: usam status/cancelamento.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../electron/database/generated"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ───────────────────────────── Empresa e configurações ─────────────────────────────
+
+model Company {
+  id                Int      @id @default(autoincrement())
+  legalName         String
+  tradeName         String?
+  document          String? // CNPJ ou CPF (somente dígitos)
+  stateRegistration String?
+  taxRegime         String? // ex.: SIMPLES_NACIONAL — validação fiscal fica a cargo do provedor
+  phone             String?
+  email             String?
+  zipCode           String?
+  street            String?
+  number            String?
+  complement        String?
+  district          String?
+  city              String?
+  state             String?
+  logoPath          String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model Setting {
+  key       String   @id
+  value     String // JSON
+  updatedAt DateTime @updatedAt
+}
+
+// ───────────────────────────── Usuários e permissões ─────────────────────────────
+
+model Role {
+  id          Int              @id @default(autoincrement())
+  key         String           @unique // ADMIN | MANAGER | OPERATOR | personalizados
+  name        String
+  description String?
+  isSystem    Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  permissions RolePermission[]
+  users       User[]
+}
+
+model Permission {
+  key         String           @id // ex.: products.manage
+  module      String
+  description String
+  roles       RolePermission[]
+}
+
+model RolePermission {
+  roleId        Int
+  permissionKey String
+  role          Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission    Permission @relation(fields: [permissionKey], references: [key], onDelete: Cascade)
+
+  @@id([roleId, permissionKey])
+}
+
+model User {
+  id                  Int       @id @default(autoincrement())
+  name                String
+  username            String    @unique // sempre em minúsculas
+  passwordHash        String
+  roleId              Int
+  active              Boolean   @default(true)
+  maxDiscountBps      Int       @default(0)
+  mustChangePassword  Boolean   @default(false)
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+  lastLoginAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  role                       Role                @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  auditLogs                  AuditLog[]
+  sales                      Sale[]              @relation("SaleOperator")
+  salesAsSeller              Sale[]              @relation("SaleSeller")
+  salesCancelled             Sale[]              @relation("SaleCancelledBy")
+  salesDiscountAuthorized    Sale[]              @relation("SaleDiscountAuthorizedBy")
+  saleReturns                SaleReturn[]        @relation("SaleReturnUser")
+  cashSessions               CashSession[]       @relation("CashSessionOperator")
+  cashSessionsClosed         CashSession[]       @relation("CashSessionClosedBy")
+  cashMovements              CashMovement[]
+  stockMovements             StockMovement[]
+  priceHistory               PriceHistory[]
+  orders                     Order[]
+  quotes                     Quote[]
+  receivablePayments         ReceivablePayment[]
+  receivablePaymentsReversed ReceivablePayment[] @relation("ReceivablePaymentReversedBy")
+  receivablesCreated         AccountReceivable[] @relation("ReceivableCreatedBy")
+  payablesCreated            AccountPayable[]    @relation("PayableCreatedBy")
+  payablesPaid               AccountPayable[]    @relation("PayablePaidBy")
+  backups                    BackupRecord[]
+  inventoriesCreated         InventoryCount[]    @relation("InventoryCreatedBy")
+  inventoriesApplied         InventoryCount[]    @relation("InventoryAppliedBy")
+
+  @@index([roleId])
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int?
+  action    String // ex.: auth.login, user.create
+  entity    String?
+  entityId  String?
+  details   String? // JSON
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([userId])
+  @@index([entity, entityId])
+}
+
+// ───────────────────────────── Cadastros ─────────────────────────────
+
+model Customer {
+  id               Int       @id @default(autoincrement())
+  name             String
+  document         String? // CPF/CNPJ (somente dígitos)
+  phone            String?
+  email            String?
+  zipCode          String?
+  street           String?
+  number           String?
+  complement       String?
+  district         String?
+  city             String?
+  state            String?
+  notes            String?
+  searchText       String    @default("") // nome/documento/telefone normalizados para busca
+  consentAt        DateTime? // LGPD: registro do consentimento para tratamento de dados
+  anonymizedAt     DateTime? // LGPD: dados pessoais removidos a pedido do titular
+  /// Limite de crediário (null = não pode comprar no crediário)
+  creditLimitCents Int?
+  active           Boolean   @default(true)
+  deletedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  sales       Sale[]
+  orders      Order[]
+  quotes      Quote[]
+  receivables AccountReceivable[]
+
+  @@index([name])
+  @@index([document])
+}
+
+model Supplier {
+  id          Int       @id @default(autoincrement())
+  name        String
+  tradeName   String?
+  document    String?
+  phone       String?
+  email       String?
+  contactName String?
+  zipCode     String?
+  street      String?
+  number      String?
+  complement  String?
+  district    String?
+  city        String?
+  state       String?
+  notes       String?
+  searchText  String    @default("")
+  active      Boolean   @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  products       Product[]
+  payables       AccountPayable[]
+  stockMovements StockMovement[]
+
+  @@index([name])
+}
+
+model Category {
+  id               Int              @id @default(autoincrement())
+  name             String
+  parentId         Int?
+  defaultMarginBps Int?
+  active           Boolean          @default(true)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  parent           Category?        @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children         Category[]       @relation("CategoryTree")
+  products         Product[]        @relation("ProductCategory")
+  subProducts      Product[]        @relation("ProductSubcategory")
+  inventoryCounts  InventoryCount[]
+
+  @@index([parentId])
+}
+
+// ───────────────────────────── Produtos ─────────────────────────────
+
+model Product {
+  id                  Int         @id @default(autoincrement())
+  internalCode        String      @unique
+  sku                 String?     @unique
+  barcode             String?     @unique
+  name                String
+  description         String?
+  categoryId          Int?
+  subcategoryId       Int?
+  brand               String?
+  supplierId          Int?
+  imagePath           String?
+  unit                String      @default("UN")
+  costCents           Int         @default(0)
+  freightCents        Int         @default(0)
+  packagingCents      Int         @default(0)
+  otherCostsCents     Int         @default(0)
+  salePriceCents      Int         @default(0)
+  promoPriceCents     Int?
+  promoStartsAt       DateTime?
+  promoEndsAt         DateTime?
+  wholesalePriceCents Int?
+  wholesaleMinMilli   Int?
+  targetMarginBps     Int?
+  taxBps              Int?
+  cardFeeBps          Int?
+  commissionBps       Int?
+  stockMilli          Int         @default(0)
+  minStockMilli       Int         @default(0)
+  allowNegativeStock  Boolean     @default(false)
+  isService           Boolean     @default(false) // serviço: sem controle de estoque
+  pricingMode         PricingMode @default(MANUAL)
+  hasVariants         Boolean     @default(false)
+  variantOptions      String? // JSON: [{"name":"Cor","values":["Azul","Preto"]}]
+  searchText          String      @default("") // nome/códigos normalizados (minúsculas, sem acentos) para busca
+  // Dados fiscais (preenchidos e validados pelo responsável fiscal da empresa)
+  ncm                 String?
+  cest                String?
+  cfop                String?
+  taxOrigin           String?
+  /// CST (regime normal) ou CSOSN (Simples Nacional), informado pelo responsável fiscal
+  taxCode             String?
+  active              Boolean     @default(true)
+  deletedAt           DateTime?
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  category       Category?            @relation("ProductCategory", fields: [categoryId], references: [id], onDelete: SetNull)
+  subcategory    Category?            @relation("ProductSubcategory", fields: [subcategoryId], references: [id], onDelete: SetNull)
+  supplier       Supplier?            @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  variants       ProductVariant[]
+  priceHistory   PriceHistory[]
+  stockMovements StockMovement[]
+  saleItems      SaleItem[]
+  orderItems     OrderItem[]
+  quoteItems     QuoteItem[]
+  inventoryItems InventoryCountItem[]
+
+  @@index([name])
+  @@index([categoryId])
+  @@index([supplierId])
+  @@index([active, deletedAt])
+}
+
+model ProductVariant {
+  id             Int       @id @default(autoincrement())
+  productId      Int
+  name           String // ex.: "Azul / M"
+  attributes     String // JSON: {"Cor":"Azul","Tamanho":"M"}
+  sku            String?   @unique
+  barcode        String?   @unique
+  costCents      Int?
+  salePriceCents Int?
+  stockMilli     Int       @default(0)
+  minStockMilli  Int       @default(0)
+  active         Boolean   @default(true)
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  product        Product              @relation(fields: [productId], references: [id], onDelete: Restrict)
+  priceHistory   PriceHistory[]
+  stockMovements StockMovement[]
+  saleItems      SaleItem[]
+  orderItems     OrderItem[]
+  quoteItems     QuoteItem[]
+  inventoryItems InventoryCountItem[]
+
+  @@index([productId])
+}
+
+enum PricingMode {
+  MANUAL // preço informado pelo usuário
+  AUTOMATIC // preço sugerido pela calculadora, recalculado ao salvar o produto
+}
+
+enum PriceField {
+  COST
+  SALE
+  PROMO
+  WHOLESALE
+}
+
+model PriceHistory {
+  id        Int             @id @default(autoincrement())
+  productId Int
+  variantId Int?
+  field     PriceField
+  oldCents  Int?
+  newCents  Int?
+  reason    String?
+  userId    Int?
+  createdAt DateTime        @default(now())
+  product   Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  user      User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([productId, createdAt])
+}
+
+// ───────────────────────────── Estoque ─────────────────────────────
+
+enum StockMovementType {
+  INITIAL
+  ENTRY
+  EXIT
+  SALE
+  SALE_CANCEL
+  RETURN
+  ADJUSTMENT
+  INVENTORY
+}
+
+model StockMovement {
+  id                Int               @id @default(autoincrement())
+  productId         Int
+  variantId         Int?
+  type              StockMovementType
+  quantityMilli     Int // positivo = entrada, negativo = saída
+  balanceAfterMilli Int
+  unitCostCents     Int?
+  reason            String?
+  referenceType     String? // ex.: SALE, ORDER, ENTRY, EXIT, INVENTORY
+  referenceId       String?
+  idempotencyKey    String?           @unique // impede baixa duplicada
+  supplierId        Int? // entradas de mercadoria
+  documentNumber    String? // nº da nota/documento da entrada
+  userId            Int?
+  createdAt         DateTime          @default(now())
+  product           Product           @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant           ProductVariant?   @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  user              User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  supplier          Supplier?         @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+
+  @@index([productId, createdAt])
+  @@index([createdAt])
+  @@index([referenceType, referenceId])
+}
+
+enum InventoryStatus {
+  OPEN
+  APPLIED
+  CANCELLED
+}
+
+/// Inventário (contagem física). Pode ser contado em etapas e aplicado de uma vez.
+model InventoryCount {
+  id          Int                  @id @default(autoincrement())
+  name        String
+  status      InventoryStatus      @default(OPEN)
+  categoryId  Int?
+  notes       String?
+  createdById Int
+  appliedById Int?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  appliedAt   DateTime?
+  cancelledAt DateTime?
+  category    Category?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  createdBy   User                 @relation("InventoryCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  appliedBy   User?                @relation("InventoryAppliedBy", fields: [appliedById], references: [id], onDelete: Restrict)
+  items       InventoryCountItem[]
+
+  @@index([status])
+}
+
+model InventoryCountItem {
+  id                Int             @id @default(autoincrement())
+  inventoryId       Int
+  productId         Int
+  variantId         Int?
+  expectedMilli     Int // estoque do sistema quando o inventário foi criado
+  countedMilli      Int? // null = ainda não contado
+  appliedDeltaMilli Int? // diferença efetivamente lançada na aplicação
+  inventory         InventoryCount  @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  product           Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant           ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([inventoryId])
+  @@index([productId, variantId])
+}
+
+// ───────────────────────────── Vendas ─────────────────────────────
+
+enum SaleStatus {
+  COMPLETED
+  CANCELLED
+}
+
+model Sale {
+  id                     Int        @id @default(autoincrement())
+  status                 SaleStatus @default(COMPLETED)
+  customerId             Int?
+  userId                 Int // operador
+  sellerId               Int?
+  cashSessionId          Int?
+  orderId                Int?       @unique // um pedido gera no máximo uma venda
+  quoteId                Int?       @unique
+  subtotalCents          Int
+  discountCents          Int        @default(0)
+  totalCents             Int
+  paidCents              Int
+  changeCents            Int        @default(0)
+  costTotalCents         Int        @default(0)
+  notes                  String?
+  idempotencyKey         String     @unique // impede finalização duplicada
+  customerDocument       String? // CPF/CNPJ informado sem cadastro de cliente
+  discountAuthorizedById Int? // supervisor que autorizou desconto acima do limite
+  cancelledAt            DateTime?
+  cancelledById          Int?
+  cancelReason           String?
+  createdAt              DateTime   @default(now())
+  updatedAt              DateTime   @updatedAt
+
+  customer             Customer?           @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  user                 User                @relation("SaleOperator", fields: [userId], references: [id], onDelete: Restrict)
+  seller               User?               @relation("SaleSeller", fields: [sellerId], references: [id], onDelete: Restrict)
+  cancelledBy          User?               @relation("SaleCancelledBy", fields: [cancelledById], references: [id], onDelete: Restrict)
+  discountAuthorizedBy User?               @relation("SaleDiscountAuthorizedBy", fields: [discountAuthorizedById], references: [id], onDelete: Restrict)
+  returns              SaleReturn[]
+  cashSession          CashSession?        @relation(fields: [cashSessionId], references: [id], onDelete: Restrict)
+  order                Order?              @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  quote                Quote?              @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  items                SaleItem[]
+  payments             Payment[]
+  receivables          AccountReceivable[]
+  fiscalDocuments      FiscalDocument[]
+  tefTransactions      TefTransaction[]
+
+  @@index([createdAt])
+  @@index([status, createdAt])
+  @@index([customerId])
+  @@index([cashSessionId])
+}
+
+model SaleItem {
+  id             Int             @id @default(autoincrement())
+  saleId         Int
+  productId      Int
+  variantId      Int?
+  description    String
+  quantityMilli  Int
+  unitPriceCents Int
+  unitCostCents  Int
+  discountCents  Int             @default(0)
+  totalCents     Int
+  sale           Sale            @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  product        Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant        ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  returnItems SaleReturnItem[]
+
+  @@index([saleId])
+  @@index([productId])
+}
+
+enum PaymentMethod {
+  CASH
+  PIX
+  DEBIT_CARD
+  CREDIT_CARD
+  STORE_CREDIT
+  VOUCHER // vale-troca gerado por devolução
+  OTHER
+}
+
+enum PaymentStatus {
+  REGISTERED // registro manual — não implica confirmação por instituição financeira
+  CONFIRMED // confirmado por integração (ex.: TEF)
+  CANCELLED
+}
+
+model Payment {
+  id                Int             @id @default(autoincrement())
+  saleId            Int
+  method            PaymentMethod
+  methodLabel       String?
+  amountCents       Int
+  installments      Int             @default(1)
+  status            PaymentStatus   @default(REGISTERED)
+  voucherReturnId   Int? // vale-troca utilizado
+  /// Dados do comprovante da maquininha (nunca o número do cartão)
+  nsu               String?
+  authorizationCode String?
+  cardBrand         String?
+  reconciledAt      DateTime? // conferido com o extrato da adquirente/banco
+  reconciledById    Int?
+  createdAt         DateTime        @default(now())
+  sale              Sale            @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  voucherReturn     SaleReturn?     @relation(fields: [voucherReturnId], references: [id], onDelete: Restrict)
+  tef               TefTransaction?
+
+  @@index([saleId])
+  @@index([method, createdAt])
+}
+
+enum RefundMethod {
+  CASH // dinheiro devolvido do caixa
+  PIX // estorno manual por PIX
+  CARD // estorno manual no cartão
+  VOUCHER // vale-troca para compras futuras
+  STORE_CREDIT // abatido das parcelas em aberto do crediário
+  NONE // sem reembolso
+}
+
+/// Devolução (total ou parcial) de itens de uma venda.
+model SaleReturn {
+  id                  Int              @id @default(autoincrement())
+  saleId              Int
+  userId              Int
+  cashSessionId       Int?
+  reason              String
+  refundMethod        RefundMethod
+  refundCents         Int
+  voucherCode         String?          @unique
+  voucherBalanceCents Int              @default(0)
+  idempotencyKey      String           @unique
+  createdAt           DateTime         @default(now())
+  sale                Sale             @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  user                User             @relation("SaleReturnUser", fields: [userId], references: [id], onDelete: Restrict)
+  cashSession         CashSession?     @relation(fields: [cashSessionId], references: [id], onDelete: Restrict)
+  items               SaleReturnItem[]
+  voucherPayments     Payment[]
+
+  @@index([saleId])
+}
+
+model SaleReturnItem {
+  id            Int        @id @default(autoincrement())
+  returnId      Int
+  saleItemId    Int
+  quantityMilli Int
+  amountCents   Int
+  saleReturn    SaleReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  saleItem      SaleItem   @relation(fields: [saleItemId], references: [id], onDelete: Restrict)
+
+  @@index([saleItemId])
+}
+
+// ───────────────────────────── Pedidos e orçamentos ─────────────────────────────
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PICKING
+  READY
+  DELIVERED
+  CANCELLED
+}
+
+model Order {
+  id                     Int         @id @default(autoincrement())
+  customerId             Int?
+  userId                 Int
+  status                 OrderStatus @default(PENDING)
+  subtotalCents          Int
+  discountCents          Int         @default(0)
+  totalCents             Int
+  expectedDeliveryAt     DateTime?
+  notes                  String?
+  quoteId                Int?        @unique
+  discountAuthorizedById Int?
+  deliveredAt            DateTime?
+  cancelledAt            DateTime?
+  cancelReason           String?
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+  customer               Customer?   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  user                   User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  quote                  Quote?      @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  items                  OrderItem[]
+  sale                   Sale?
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id             Int             @id @default(autoincrement())
+  orderId        Int
+  productId      Int
+  variantId      Int?
+  description    String
+  quantityMilli  Int
+  unitPriceCents Int
+  discountCents  Int             @default(0)
+  totalCents     Int
+  order          Order           @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  product        Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant        ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+model Quote {
+  id                     Int         @id @default(autoincrement())
+  customerId             Int?
+  userId                 Int
+  status                 QuoteStatus @default(DRAFT)
+  validUntil             DateTime?
+  subtotalCents          Int
+  discountCents          Int         @default(0)
+  totalCents             Int
+  notes                  String?
+  contactName            String? // interessado sem cadastro de cliente
+  contactPhone           String?
+  discountAuthorizedById Int?
+  sentAt                 DateTime?
+  decidedAt              DateTime?
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+  customer               Customer?   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  user                   User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  items                  QuoteItem[]
+  order                  Order?
+  sale                   Sale?
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model QuoteItem {
+  id             Int             @id @default(autoincrement())
+  quoteId        Int
+  productId      Int? // nulo para serviços avulsos
+  variantId      Int?
+  isService      Boolean         @default(false)
+  description    String
+  quantityMilli  Int
+  unitPriceCents Int
+  discountCents  Int             @default(0)
+  totalCents     Int
+  quote          Quote           @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  product        Product?        @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant        ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([quoteId])
+}
+
+// ───────────────────────────── Caixa ─────────────────────────────
+
+enum CashSessionStatus {
+  OPEN
+  CLOSED
+}
+
+model CashSession {
+  id              Int               @id @default(autoincrement())
+  userId          Int
+  status          CashSessionStatus @default(OPEN)
+  openingCents    Int
+  openedAt        DateTime          @default(now())
+  closedAt        DateTime?
+  closedById      Int?
+  expectedCents   Int?
+  countedCents    Int?
+  differenceCents Int?
+  closingSummary  String? // JSON: resumo por forma de pagamento congelado no fechamento
+  notes           String?
+  user            User              @relation("CashSessionOperator", fields: [userId], references: [id], onDelete: Restrict)
+  closedBy        User?             @relation("CashSessionClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
+  movements       CashMovement[]
+  sales           Sale[]
+  saleReturns     SaleReturn[]
+
+  @@index([userId, status])
+  @@index([status])
+}
+
+enum CashMovementType {
+  SALE
+  SALE_CANCEL
+  SUPPLY // suprimento
+  WITHDRAWAL // sangria
+  RECEIVABLE
+  PAYABLE
+  OTHER_IN
+  OTHER_OUT
+  RETURN_REFUND // reembolso de devolução
+}
+
+model CashMovement {
+  id             Int              @id @default(autoincrement())
+  cashSessionId  Int
+  type           CashMovementType
+  method         PaymentMethod    @default(CASH)
+  amountCents    Int // positivo = entrada, negativo = saída
+  description    String?
+  referenceType  String?
+  referenceId    String?
+  idempotencyKey String?          @unique
+  userId         Int
+  createdAt      DateTime         @default(now())
+  cashSession    CashSession      @relation(fields: [cashSessionId], references: [id], onDelete: Restrict)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([cashSessionId])
+  @@index([createdAt])
+}
+
+// ───────────────────────────── Financeiro ─────────────────────────────
+
+enum PayableStatus {
+  OPEN
+  PAID
+  CANCELLED
+}
+
+enum Recurrence {
+  NONE
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+model AccountPayable {
+  id                 Int             @id @default(autoincrement())
+  description        String
+  supplierId         Int?
+  category           String?
+  documentNumber     String?
+  amountCents        Int
+  dueDate            DateTime
+  paidAt             DateTime?
+  paidCents          Int? // valor efetivamente pago (com juros ou desconto)
+  paymentMethod      PaymentMethod?
+  paidFromCash       Boolean         @default(false) // saiu do dinheiro da gaveta (movimento no caixa)
+  paymentKey         String?         @unique // idempotência do pagamento
+  paidById           Int?
+  status             PayableStatus   @default(OPEN)
+  receiptPath        String? // comprovante anexado (arquivo em userData/anexos)
+  receiptName        String?
+  recurrence         Recurrence      @default(NONE)
+  /// Conta recorrente que gerou esta (no máximo uma próxima por conta)
+  recurrenceSourceId Int?            @unique
+  notes              String?
+  searchText         String          @default("")
+  createdById        Int?
+  cancelledAt        DateTime?
+  cancelReason       String?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  supplier           Supplier?       @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  createdBy          User?           @relation("PayableCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  paidBy             User?           @relation("PayablePaidBy", fields: [paidById], references: [id], onDelete: Restrict)
+  recurrenceSource   AccountPayable? @relation("PayableRecurrence", fields: [recurrenceSourceId], references: [id], onDelete: Restrict)
+  recurrenceNext     AccountPayable? @relation("PayableRecurrence")
+
+  @@index([status, dueDate])
+  @@index([paidAt])
+}
+
+enum ReceivableStatus {
+  OPEN
+  PARTIAL
+  PAID
+  CANCELLED
+}
+
+model AccountReceivable {
+  id                Int                 @id @default(autoincrement())
+  description       String
+  customerId        Int?
+  saleId            Int?
+  installmentNumber Int                 @default(1)
+  amountCents       Int
+  receivedCents     Int                 @default(0)
+  dueDate           DateTime
+  status            ReceivableStatus    @default(OPEN)
+  notes             String?
+  createdById       Int?
+  cancelledAt       DateTime?
+  cancelReason      String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  createdBy         User?               @relation("ReceivableCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  customer          Customer?           @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  sale              Sale?               @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  payments          ReceivablePayment[]
+
+  @@unique([saleId, installmentNumber])
+  @@index([status, dueDate])
+}
+
+model ReceivablePayment {
+  id             Int               @id @default(autoincrement())
+  receivableId   Int
+  amountCents    Int // valor abatido da parcela (principal)
+  interestCents  Int               @default(0) // juros/multa recebidos além do principal
+  discountCents  Int               @default(0) // desconto concedido na quitação (abate sem entrar dinheiro)
+  method         PaymentMethod
+  paidAt         DateTime          @default(now())
+  userId         Int
+  idempotencyKey String            @unique
+  cashSessionId  Int? // caixa onde o dinheiro entrou (se houver)
+  reversedAt     DateTime?
+  reversedById   Int?
+  reverseReason  String?
+  receivable     AccountReceivable @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+  user           User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  reversedBy     User?             @relation("ReceivablePaymentReversedBy", fields: [reversedById], references: [id], onDelete: Restrict)
+
+  @@index([receivableId])
+  @@index([paidAt])
+}
+
+// ───────────────────────────── Integrações ─────────────────────────────
+
+enum FiscalDocType {
+  NFE
+  NFCE
+}
+
+enum FiscalDocStatus {
+  PENDING
+  PROCESSING
+  AUTHORIZED // somente quando retornado por provedor fiscal real
+  REJECTED
+  CANCELLED // cancelada na SEFAZ (via provedor)
+  ERROR
+  DISCARDED // rascunho descartado antes de qualquer transmissão
+}
+
+model FiscalDocument {
+  id            Int             @id @default(autoincrement())
+  type          FiscalDocType
+  saleId        Int?
+  provider      String?
+  environment   String          @default("HOMOLOGACAO")
+  number        Int?
+  series        Int?
+  accessKey     String?         @unique
+  protocol      String?
+  status        FiscalDocStatus @default(PENDING)
+  message       String?
+  xmlPath       String?
+  danfePath     String?
+  /// Dados preparados para o provedor (JSON) e pendências encontradas na conferência
+  payload       String?
+  issues        String?
+  totalCents    Int             @default(0)
+  requestedById Int?
+  authorizedAt  DateTime?
+  cancelledAt   DateTime?
+  cancelReason  String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  sale          Sale?           @relation(fields: [saleId], references: [id], onDelete: Restrict)
+
+  @@index([saleId])
+  @@index([status])
+}
+
+enum TefStatus {
+  PENDING
+  APPROVED // somente quando retornado por provedor TEF real
+  DECLINED
+  CANCELLED
+  ERROR
+}
+
+model TefTransaction {
+  id                Int           @id @default(autoincrement())
+  saleId            Int?
+  paymentId         Int?          @unique
+  provider          String
+  status            TefStatus     @default(PENDING)
+  method            PaymentMethod
+  amountCents       Int
+  installments      Int           @default(1)
+  nsu               String?
+  authorizationCode String?
+  cardBrand         String?
+  cardLast4         String? // nunca armazenar o número completo do cartão
+  merchantReceipt   String?
+  customerReceipt   String?
+  message           String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  sale              Sale?         @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  payment           Payment?      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@index([saleId])
+}
+
+// ───────────────────────────── Backup ─────────────────────────────
+
+enum BackupKind {
+  MANUAL
+  AUTOMATIC
+  PRE_MIGRATION
+  PRE_RESTORE
+}
+
+enum BackupStatus {
+  OK
+  FAILED // tentativa registrada com o motivo (ex.: pasta/dispositivo indisponível)
+  REMOVED // arquivo apagado pela política de retenção dos backups automáticos
+}
+
+model BackupRecord {
+  id         Int          @id @default(autoincrement())
+  kind       BackupKind
+  status     BackupStatus @default(OK)
+  path       String
+  sizeBytes  Int
+  checksum   String // SHA-256 do arquivo gravado
+  /// Criptografado com AES-256-GCM (senha do backup)
+  encrypted  Boolean      @default(false)
+  verifiedAt DateTime?
+  message    String?
+  userId     Int?
+  createdAt  DateTime     @default(now())
+  user       User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([kind, status])
+}

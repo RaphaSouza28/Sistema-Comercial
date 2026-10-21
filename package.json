@@ -1,0 +1,59 @@
+{
+  "name": "sistema-comercial",
+  "productName": "Sistema Comercial",
+  "version": "1.0.0",
+  "description": "Sistema comercial desktop: PDV, estoque, financeiro e gestão para pequenas e médias empresas.",
+  "author": "Sistema Comercial",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "npm run typecheck && electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "postprisma:migrate": "prisma generate",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "icon": "node scripts/generate-icon.mjs",
+    "dist": "npm run build && electron-builder --win --x64",
+    "dist:dir": "npm run build && electron-builder --win --x64 --dir",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@libsql/client": "0.17.0",
+    "@prisma/adapter-libsql": "7.10.1",
+    "@prisma/client": "7.10.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "electron": "43.8.1",
+    "electron-builder": "26.15.3",
+    "electron-vite": "6.0.0",
+    "lucide-react": "1.60.0",
+    "prisma": "7.10.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-router-dom": "7.18.4",
+    "recharts": "3.10.1",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vite": "8.3.4",
+    "vitest": "5.0.5",
+    "zod": "4.6.7"
+  },
+  "allowScripts": {
+    "@prisma/engines@7.10.1": true,
+    "electron-winstaller@5.4.0": true,
+    "prisma@7.10.1": true,
+    "electron@43.8.1": true
+  }
+}
